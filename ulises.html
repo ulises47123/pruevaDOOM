@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Doom Geométrico</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #000;
+            color: #fff;
+            font-family: 'Courier New', monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        
+        #gameContainer {
+            position: relative;
+            border: 2px solid #333;
+        }
+        
+        canvas {
+            background: #222;
+            display: block;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+        }
+        
+        .health-bar {
+            width: 200px;
+            height: 20px;
+            border: 2px solid #fff;
+            background: #333;
+            margin-bottom: 10px;
+        }
+        
+        .health-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff0000, #ffff00, #00ff00);
+            transition: width 0.3s;
+        }
+        
+        .info {
+            font-size: 14px;
+            text-shadow: 1px 1px 2px #000;
+        }
+        
+        #instructions {
+            position: absolute;
+            bottom: 10px;
+            left: 10px;
+            font-size: 12px;
+            color: #aaa;
+        }
+        
+        #gameOver {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.8);
+            padding: 20px;
+            border: 2px solid #fff;
+            text-align: center;
+            display: none;
+            z-index: 20;
+        }
+        
+        button {
+            background: #333;
+            color: #fff;
+            border: 1px solid #fff;
+            padding: 10px 20px;
+            margin: 5px;
+            cursor: pointer;
+            font-family: inherit;
+        }
+        
+        button:hover {
+            background: #555;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div id="ui">
+            <div class="health-bar">
+                <div class="health-fill" id="healthFill" style="width: 100%"></div>
+            </div>
+            <div class="info">
+                <div>Vida: <span id="healthText">100</span>/100</div>
+                <div>Arma: <span id="weaponText">Ninguna</span></div>
+                <div>Objetivo: <span id="objectiveText">Encuentra la llave dorada</span></div>
+            </div>
+        </div>
+        
+        <div id="instructions">
+            WASD: Mover | Mouse: Apuntar | Click: Disparar | Encuentra objetos verdes (curación), amarillos (arma) y la llave dorada
+        </div>
+        
+        <div id="gameOver">
+            <h2 id="gameOverTitle">¡Juego Terminado!</h2>
+            <p id="gameOverText"></p>
+            <button onclick="restartGame()">Jugar de Nuevo</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Variables del juego
+        let gameState = 'playing'; // 'playing', 'gameOver', 'victory'
+        let mouseX = 0, mouseY = 0;
+        
+        // Jugador
+        const player = {
+            x: 100,
+            y: 100,
+            size: 15,
+            health: 100,
+            maxHealth: 100,
+            speed: 3,
+            hasWeapon: false,
+            color: '#00ffff'
+        };
+        
+        // Arrays del juego
+        let enemies = [];
+        let bullets = [];
+        let healthPacks = [];
+        let weapons = [];
+        let walls = [];
+        let key = null;
+        
+        // Input
+        const keys = {};
+        
+        // Generar mapa
+        function generateMap() {
+            walls = [];
+            
+            // Paredes del perímetro
+            for(let x = 0; x < canvas.width; x += 20) {
+                walls.push({x: x, y: 0, width: 20, height: 20});
+                walls.push({x: x, y: canvas.height - 20, width: 20, height: 20});
+            }
+            for(let y = 20; y < canvas.height - 20; y += 20) {
+                walls.push({x: 0, y: y, width: 20, height: 20});
+                walls.push({x: canvas.width - 20, y: y, width: 20, height: 20});
+            }
+            
+            // Paredes internas aleatorias
+            for(let i = 0; i < 15; i++) {
+                let x = Math.floor(Math.random() * (canvas.width - 100)) + 50;
+                let y = Math.floor(Math.random() * (canvas.height - 100)) + 50;
+                x = Math.floor(x / 20) * 20;
+                y = Math.floor(y / 20) * 20;
+                
+                // Evitar colocar cerca del jugador
+                if(Math.abs(x - player.x) > 60 && Math.abs(y - player.y) > 60) {
+                    walls.push({x: x, y: y, width: 60, height: 20});
+                }
+            }
+        }
+        
+        // Generar enemigos
+        function generateEnemies() {
+            enemies = [];
+            for(let i = 0; i < 8; i++) {
+                let x, y;
+                do {
+                    x = Math.random() * (canvas.width - 100) + 50;
+                    y = Math.random() * (canvas.height - 100) + 50;
+                } while(Math.abs(x - player.x) < 100 && Math.abs(y - player.y) < 100);
+                
+                enemies.push({
+                    x: x,
+                    y: y,
+                    size: 12,
+                    health: 30,
+                    speed: 1.5,
+                    color: '#ff0000',
+                    lastMoveTime: 0,
+                    moveDirection: Math.random() * Math.PI * 2,
+                    changeDirectionTime: Date.now() + Math.random() * 3000
+                });
+            }
+        }
+        
+        // Generar objetos
+        function generateItems() {
+            healthPacks = [];
+            weapons = [];
+            
+            // Paquetes de salud (verdes)
+            for(let i = 0; i < 5; i++) {
+                let x = Math.random() * (canvas.width - 100) + 50;
+                let y = Math.random() * (canvas.height - 100) + 50;
+                healthPacks.push({
+                    x: x, y: y, size: 8, color: '#00ff00', collected: false
+                });
+            }
+            
+            // Armas (amarillas)
+            for(let i = 0; i < 2; i++) {
+                let x = Math.random() * (canvas.width - 100) + 50;
+                let y = Math.random() * (canvas.height - 100) + 50;
+                weapons.push({
+                    x: x, y: y, width: 16, height: 4, color: '#ffff00', collected: false
+                });
+            }
+            
+            // Llave dorada
+            let keyX = Math.random() * (canvas.width - 100) + 50;
+            let keyY = Math.random() * (canvas.height - 100) + 50;
+            key = {
+                x: keyX, y: keyY, size: 10, color: '#ffd700', collected: false
+            };
+        }
+        
+        // Verificar colisión con paredes
+        function checkWallCollision(x, y, size) {
+            for(let wall of walls) {
+                if(x < wall.x + wall.width && x + size > wall.x &&
+                   y < wall.y + wall.height && y + size > wall.y) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        
+        // Mover jugador
+        function movePlayer() {
+            let newX = player.x;
+            let newY = player.y;
+            
+            if(keys['w'] || keys['W']) newY -= player.speed;
+            if(keys['s'] || keys['S']) newY += player.speed;
+            if(keys['a'] || keys['A']) newX -= player.speed;
+            if(keys['d'] || keys['D']) newX += player.speed;
+            
+            // Verificar límites y colisiones
+            if(newX >= 0 && newX + player.size <= canvas.width && !checkWallCollision(newX, player.y, player.size)) {
+                player.x = newX;
+            }
+            if(newY >= 0 && newY + player.size <= canvas.height && !checkWallCollision(player.x, newY, player.size)) {
+                player.y = newY;
+            }
+        }
+        
+        // Mover enemigos con IA estratégica
+        function moveEnemies() {
+            const currentTime = Date.now();
+            
+            enemies.forEach(enemy => {
+                if(enemy.health <= 0) return;
+                
+                // Cambiar dirección periódicamente o si hay obstáculo
+                if(currentTime > enemy.changeDirectionTime) {
+                    // Decidir si seguir al jugador o moverse aleatoriamente
+                    const distanceToPlayer = Math.sqrt(Math.pow(player.x - enemy.x, 2) + Math.pow(player.y - enemy.y, 2));
+                    
+                    if(distanceToPlayer < 150 && Math.random() < 0.7) {
+                        // Seguir al jugador
+                        enemy.moveDirection = Math.atan2(player.y - enemy.y, player.x - enemy.x);
+                    } else if(distanceToPlayer < 80) {
+                        // Si está muy cerca, retroceder ocasionalmente
+                        if(Math.random() < 0.3) {
+                            enemy.moveDirection = Math.atan2(enemy.y - player.y, enemy.x - player.x);
+                        }
+                    } else {
+                        // Movimiento aleatorio
+                        enemy.moveDirection = Math.random() * Math.PI * 2;
+                    }
+                    
+                    enemy.changeDirectionTime = currentTime + (1000 + Math.random() * 2000);
+                }
+                
+                // Calcular nueva posición
+                let newX = enemy.x + Math.cos(enemy.moveDirection) * enemy.speed;
+                let newY = enemy.y + Math.sin(enemy.moveDirection) * enemy.speed;
+                
+                // Verificar colisiones y límites
+                if(newX >= 0 && newX + enemy.size <= canvas.width && !checkWallCollision(newX, enemy.y, enemy.size)) {
+                    enemy.x = newX;
+                } else {
+                    enemy.moveDirection += Math.PI / 2; // Cambiar dirección al chocar
+                }
+                
+                if(newY >= 0 && newY + enemy.size <= canvas.height && !checkWallCollision(enemy.x, newY, enemy.size)) {
+                    enemy.y = newY;
+                } else {
+                    enemy.moveDirection += Math.PI / 2; // Cambiar dirección al chocar
+                }
+                
+                // Dañar jugador si está cerca
+                const distance = Math.sqrt(Math.pow(player.x - enemy.x, 2) + Math.pow(player.y - enemy.y, 2));
+                if(distance < player.size + enemy.size + 5) {
+                    player.health -= 0.5;
+                    if(player.health <= 0) {
+                        gameOver(false);
+                    }
+                }
+            });
+        }
+        
+        // Disparar
+        function shoot(targetX, targetY) {
+            if(!player.hasWeapon) return;
+            
+            const angle = Math.atan2(targetY - (player.y + player.size/2), targetX - (player.x + player.size/2));
+            bullets.push({
+                x: player.x + player.size/2,
+                y: player.y + player.size/2,
+                vx: Math.cos(angle) * 8,
+                vy: Math.sin(angle) * 8,
+                size: 3,
+                color: '#ffffff',
+                damage: 15
+            });
+        }
+        
+        // Actualizar balas
+        function updateBullets() {
+            bullets = bullets.filter(bullet => {
+                bullet.x += bullet.vx;
+                bullet.y += bullet.vy;
+                
+                // Eliminar si sale del canvas
+                if(bullet.x < 0 || bullet.x > canvas.width || bullet.y < 0 || bullet.y > canvas.height) {
+                    return false;
+                }
+                
+                // Verificar colisión con paredes
+                if(checkWallCollision(bullet.x, bullet.y, bullet.size)) {
+                    return false;
+                }
+                
+                // Verificar colisión con enemigos
+                for(let i = 0; i < enemies.length; i++) {
+                    const enemy = enemies[i];
+                    const distance = Math.sqrt(Math.pow(bullet.x - enemy.x, 2) + Math.pow(bullet.y - enemy.y, 2));
+                    if(distance < bullet.size + enemy.size) {
+                        enemy.health -= bullet.damage;
+                        if(enemy.health <= 0) {
+                            enemies.splice(i, 1);
+                        }
+                        return false;
+                    }
+                }
+                
+                return true;
+            });
+        }
+        
+        // Verificar colisiones con objetos
+        function checkItemCollisions() {
+            // Paquetes de salud
+            healthPacks.forEach(pack => {
+                if(!pack.collected) {
+                    const distance = Math.sqrt(Math.pow(player.x - pack.x, 2) + Math.pow(player.y - pack.y, 2));
+                    if(distance < player.size + pack.size) {
+                        pack.collected = true;
+                        player.health = Math.min(player.maxHealth, player.health + 30);
+                    }
+                }
+            });
+            
+            // Armas
+            weapons.forEach(weapon => {
+                if(!weapon.collected) {
+                    const distance = Math.sqrt(Math.pow(player.x - weapon.x, 2) + Math.pow(player.y - weapon.y, 2));
+                    if(distance < player.size + 10) {
+                        weapon.collected = true;
+                        player.hasWeapon = true;
+                    }
+                }
+            });
+            
+            // Llave
+            if(key && !key.collected) {
+                const distance = Math.sqrt(Math.pow(player.x - key.x, 2) + Math.pow(player.y - key.y, 2));
+                if(distance < player.size + key.size) {
+                    key.collected = true;
+                    gameOver(true);
+                }
+            }
+        }
+        
+        // Dibujar todo
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Dibujar paredes
+            ctx.fillStyle = '#444';
+            walls.forEach(wall => {
+                ctx.fillRect(wall.x, wall.y, wall.width, wall.height);
+            });
+            
+            // Dibujar objetos
+            healthPacks.forEach(pack => {
+                if(!pack.collected) {
+                    ctx.fillStyle = pack.color;
+                    ctx.beginPath();
+                    ctx.arc(pack.x, pack.y, pack.size, 0, Math.PI * 2);
+                    ctx.fill();
+                }
+            });
+            
+            weapons.forEach(weapon => {
+                if(!weapon.collected) {
+                    ctx.fillStyle = weapon.color;
+                    ctx.fillRect(weapon.x - weapon.width/2, weapon.y - weapon.height/2, weapon.width, weapon.height);
+                }
+            });
+            
+            // Dibujar llave
+            if(key && !key.collected) {
+                ctx.fillStyle = key.color;
+                ctx.beginPath();
+                ctx.arc(key.x, key.y, key.size, 0, Math.PI * 2);
+                ctx.fill();
+                // Añadir brillo
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            }
+            
+            // Dibujar enemigos
+            enemies.forEach(enemy => {
+                if(enemy.health > 0) {
+                    ctx.fillStyle = enemy.color;
+                    ctx.fillRect(enemy.x - enemy.size/2, enemy.y - enemy.size/2, enemy.size, enemy.size);
+                    
+                    // Barra de vida del enemigo
+                    if(enemy.health < 30) {
+                        const healthWidth = 20;
+                        const healthHeight = 3;
+                        ctx.fillStyle = '#333';
+                        ctx.fillRect(enemy.x - healthWidth/2, enemy.y - enemy.size/2 - 8, healthWidth, healthHeight);
+                        ctx.fillStyle = '#ff0000';
+                        ctx.fillRect(enemy.x - healthWidth/2, enemy.y - enemy.size/2 - 8, (enemy.health / 30) * healthWidth, healthHeight);
+                    }
+                }
+            });
+            
+            // Dibujar balas
+            bullets.forEach(bullet => {
+                ctx.fillStyle = bullet.color;
+                ctx.beginPath();
+                ctx.arc(bullet.x, bullet.y, bullet.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            
+            // Dibujar jugador
+            ctx.fillStyle = player.color;
+            ctx.beginPath();
+            ctx.arc(player.x + player.size/2, player.y + player.size/2, player.size/2, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Dibujar línea de apuntado si tiene arma
+            if(player.hasWeapon) {
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 1;
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath();
+                ctx.moveTo(player.x + player.size/2, player.y + player.size/2);
+                ctx.lineTo(mouseX, mouseY);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+        }
+        
+        // Actualizar UI
+        function updateUI() {
+            const healthPercent = (player.health / player.maxHealth) * 100;
+            document.getElementById('healthFill').style.width = healthPercent + '%';
+            document.getElementById('healthText').textContent = Math.max(0, Math.floor(player.health));
+            document.getElementById('weaponText').textContent = player.hasWeapon ? 'Pistola' : 'Ninguna';
+        }
+        
+        // Game Over
+        function gameOver(victory) {
+            gameState = victory ? 'victory' : 'gameOver';
+            const gameOverDiv = document.getElementById('gameOver');
+            const title = document.getElementById('gameOverTitle');
+            const text = document.getElementById('gameOverText');
+            
+            if(victory) {
+                title.textContent = '¡Victoria!';
+                text.textContent = '¡Has encontrado la llave dorada y completado el juego!';
+                title.style.color = '#00ff00';
+            } else {
+                title.textContent = '¡Game Over!';
+                text.textContent = 'Tu salud llegó a cero. ¡Inténtalo de nuevo!';
+                title.style.color = '#ff0000';
+            }
+            
+            gameOverDiv.style.display = 'block';
+        }
+        
+        // Reiniciar juego
+        function restartGame() {
+            gameState = 'playing';
+            player.x = 100;
+            player.y = 100;
+            player.health = 100;
+            player.hasWeapon = false;
+            bullets = [];
+            
+            generateMap();
+            generateEnemies();
+            generateItems();
+            
+            document.getElementById('gameOver').style.display = 'none';
+        }
+        
+        // Loop principal del juego
+        function gameLoop() {
+            if(gameState === 'playing') {
+                movePlayer();
+                moveEnemies();
+                updateBullets();
+                checkItemCollisions();
+                updateUI();
+            }
+            
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // Event listeners
+        document.addEventListener('keydown', (e) => {
+            keys[e.key] = true;
+        });
+        
+        document.addEventListener('keyup', (e) => {
+            keys[e.key] = false;
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            mouseX = e.clientX - rect.left;
+            mouseY = e.clientY - rect.top;
+        });
+        
+        canvas.addEventListener('click', (e) => {
+            if(gameState === 'playing') {
+                const rect = canvas.getBoundingClientRect();
+                const clickX = e.clientX - rect.left;
+                const clickY = e.clientY - rect.top;
+                shoot(clickX, clickY);
+            }
+        });
+        
+        // Prevenir menú contextual
+        canvas.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+        });
+        
+        // Inicializar juego
+        generateMap();
+        generateEnemies();
+        generateItems();
+        gameLoop();
+    </script>
+</body>
+</html>
